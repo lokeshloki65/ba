@@ -1,0 +1,38 @@
+1. Open Excel and enter your sample data in one column (e.g., A1:A10).
+Example data: 14, 16, 15, 17, 13, 18, 15, 16, 14, 17
+
+
+2. Enable Data Analysis ToolPak:
+
+Go to File → Options → Add-ins.
+
+Select Excel Add-ins → Go → Check “Analysis ToolPak” → OK.
+
+
+
+3. Run the One-Sample T-Test:
+
+Click Data → Data Analysis → t-Test: Two-Sample Assuming Equal Variances (Excel doesn’t have a direct “one-sample t-test,” so compare your data column to a column filled with the hypothesized mean, e.g., 12).
+
+Select:
+
+Variable 1 Range: Your sample data
+
+Variable 2 Range: Hypothesized mean values (e.g., all cells = 12)
+
+Hypothesized Mean Difference: 0
+
+Output Range: Choose where to display results
+
+
+
+4. Click OK to generate the results.
+Excel will output values such as:
+
+Statistic	Value
+Mean	15.5
+Hypothesized Mean	12
+df	9
+t Stat	2.73
+P(T<=t) two-tail	0.018
+t Critical two-tail	2.26
