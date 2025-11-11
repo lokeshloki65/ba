@@ -1,38 +1,56 @@
-1. Open Excel and enter your sample data in one column (e.g., A1:A10).
-Example data: 14, 16, 15, 17, 13, 18, 15, 16, 14, 17
+# pip install -q tensorflow==2.15.0
+#pip install -q tensorflow-cpu==2.15.0
+
+import numpy as np
+from tensorflow.keras import Input, Model
+from tensorflow.keras.layers import Embedding, LSTM, Dense
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+# ---- Data ----
+sents = [["I","love","dogs"],["She","eats","apples"],["They","play","football"],["I","eat","rice"]]
+tags  = [["PRON","VERB","NOUN"]]*4
+
+# ---- Vocab ----
+w2i={"<PAD>":0}; [w2i.setdefault(w,len(w2i)) for s in sents for w in s]
+t2i={"<PAD>":0,"<SOS>":1,"<EOS>":2}; [t2i.setdefault(t,len(t2i)) for row in tags for t in row]
+i2t={v:k for k,v in t2i.items()}
+max_len=max(len(s) for s in sents)
+
+# ---- Encode inputs ----
+enc_inp=pad_sequences([[w2i[w] for w in s] for s in sents],maxlen=max_len,padding="post")
+dec_inp,dec_tgt=[],[]
+for tg in tags:
+    y=[t2i[t] for t in tg]
+    di=[t2i["<SOS>"]]+y; dt=y+[t2i["<EOS>"]]
+    di+= [0]*(max_len+1-len(di)); dt+= [0]*(max_len+1-len(dt))
+    dec_inp.append(di); dec_tgt.append(dt)
+enc_inp=np.array(enc_inp); dec_inp=np.array(dec_inp); dec_tgt=np.array(dec_tgt)[...,None]
+
+# ---- Model ----
+V=len(w2i); T=len(t2i); E=32; H=64
+enc_x=Input(shape=(max_len,)); enc_emb=Embedding(V,E,mask_zero=True)(enc_x)
+_,h,c=LSTM(H,return_state=True)(enc_emb)
+dec_x=Input(shape=(max_len+1,)); dec_emb=Embedding(T,E,mask_zero=True)(dec_x)
+dec_out,_,_=LSTM(H,return_sequences=True,return_state=True)(dec_emb,initial_state=[h,c])
+logits=Dense(T,activation="softmax")(dec_out)
+model=Model([enc_x,dec_x],logits); model.compile("adam","sparse_categorical_crossentropy",metrics=["accuracy"])
+model.fit([enc_inp,dec_inp],dec_tgt,epochs=200,verbose=0)
+
+# ---- Inference ----
+def predict_tags(words):
+    x=pad_sequences([[w2i.get(w,0) for w in words]],maxlen=max_len,padding="post")
+    d=np.zeros((1,max_len+1),int); d[0,0]=t2i["<SOS>"]
+    ids=model.predict([x,d],verbose=0)[0].argmax(-1)
+    out=[]
+    for i,idx in enumerate(ids):
+        t=i2t.get(int(idx),"<PAD>")
+        if t=="<EOS>": break
+        if i<len(words): out.append(t)
+    return out
+
+for s in sents:
+    print("Input :", " ".join(s))
+    print("Pred  :", " ".join(predict_tags(s)))
+    print("-"*25)
 
 
-2. Enable Data Analysis ToolPak:
-
-Go to File → Options → Add-ins.
-
-Select Excel Add-ins → Go → Check “Analysis ToolPak” → OK.
-
-
-
-3. Run the One-Sample T-Test:
-
-Click Data → Data Analysis → t-Test: Two-Sample Assuming Equal Variances (Excel doesn’t have a direct “one-sample t-test,” so compare your data column to a column filled with the hypothesized mean, e.g., 12).
-
-Select:
-
-Variable 1 Range: Your sample data
-
-Variable 2 Range: Hypothesized mean values (e.g., all cells = 12)
-
-Hypothesized Mean Difference: 0
-
-Output Range: Choose where to display results
-
-
-
-4. Click OK to generate the results.
-Excel will output values such as:
-
-Statistic	Value
-Mean	15.5
-Hypothesized Mean	12
-df	9
-t Stat	2.73
-P(T<=t) two-tail	0.018
-t Critical two-tail	2.26
