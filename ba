@@ -1,56 +1,127 @@
-# pip install -q tensorflow==2.15.0
-#pip install -q tensorflow-cpu==2.15.0
+pip install tensorflow matplotlib numpy
 
+....
+# dcgan_mnist_short.py
+# Short DCGAN demo for image augmentation (MNIST)
 import numpy as np
-from tensorflow.keras import Input, Model
-from tensorflow.keras.layers import Embedding, LSTM, Dense
-from tensorflow.keras.preprocessing.sequence import pad_sequences
+import tensorflow as tf
+from tensorflow.keras import layers, models, optimizers
+import matplotlib.pyplot as plt
 
-# ---- Data ----
-sents = [["I","love","dogs"],["She","eats","apples"],["They","play","football"],["I","eat","rice"]]
-tags  = [["PRON","VERB","NOUN"]]*4
+# --- params ---
+LATENT_DIM = 100
+BATCH_SIZE = 256
+EPOCHS = 10   # short demo; raise to 50/100+ for better images
 
-# ---- Vocab ----
-w2i={"<PAD>":0}; [w2i.setdefault(w,len(w2i)) for s in sents for w in s]
-t2i={"<PAD>":0,"<SOS>":1,"<EOS>":2}; [t2i.setdefault(t,len(t2i)) for row in tags for t in row]
-i2t={v:k for k,v in t2i.items()}
-max_len=max(len(s) for s in sents)
+# 1) Load MNIST
+(x_train, _), (_, _) = tf.keras.datasets.mnist.load_data()
+x_train = (x_train.astype("float32") - 127.5) / 127.5  # scale to [-1,1]
+x_train = np.expand_dims(x_train, axis=-1)
 
-# ---- Encode inputs ----
-enc_inp=pad_sequences([[w2i[w] for w in s] for s in sents],maxlen=max_len,padding="post")
-dec_inp,dec_tgt=[],[]
-for tg in tags:
-    y=[t2i[t] for t in tg]
-    di=[t2i["<SOS>"]]+y; dt=y+[t2i["<EOS>"]]
-    di+= [0]*(max_len+1-len(di)); dt+= [0]*(max_len+1-len(dt))
-    dec_inp.append(di); dec_tgt.append(dt)
-enc_inp=np.array(enc_inp); dec_inp=np.array(dec_inp); dec_tgt=np.array(dec_tgt)[...,None]
+train_ds = tf.data.Dataset.from_tensor_slices(x_train).shuffle(60000).batch(BATCH_SIZE)
 
-# ---- Model ----
-V=len(w2i); T=len(t2i); E=32; H=64
-enc_x=Input(shape=(max_len,)); enc_emb=Embedding(V,E,mask_zero=True)(enc_x)
-_,h,c=LSTM(H,return_state=True)(enc_emb)
-dec_x=Input(shape=(max_len+1,)); dec_emb=Embedding(T,E,mask_zero=True)(dec_x)
-dec_out,_,_=LSTM(H,return_sequences=True,return_state=True)(dec_emb,initial_state=[h,c])
-logits=Dense(T,activation="softmax")(dec_out)
-model=Model([enc_x,dec_x],logits); model.compile("adam","sparse_categorical_crossentropy",metrics=["accuracy"])
-model.fit([enc_inp,dec_inp],dec_tgt,epochs=200,verbose=0)
+# 2) Generator
+def make_generator():
+    g = models.Sequential(name="generator")
+    g.add(layers.Dense(7*7*256, use_bias=False, input_shape=(LATENT_DIM,)))
+    g.add(layers.BatchNormalization()); g.add(layers.LeakyReLU())
+    g.add(layers.Reshape((7,7,256)))
+    g.add(layers.Conv2DTranspose(128, 5, padding='same', use_bias=False))
+    g.add(layers.BatchNormalization()); g.add(layers.LeakyReLU())
+    g.add(layers.Conv2DTranspose(64, 5, strides=2, padding='same', use_bias=False))
+    g.add(layers.BatchNormalization()); g.add(layers.LeakyReLU())
+    g.add(layers.Conv2DTranspose(1, 5, strides=2, padding='same', activation='tanh'))
+    return g
 
-# ---- Inference ----
-def predict_tags(words):
-    x=pad_sequences([[w2i.get(w,0) for w in words]],maxlen=max_len,padding="post")
-    d=np.zeros((1,max_len+1),int); d[0,0]=t2i["<SOS>"]
-    ids=model.predict([x,d],verbose=0)[0].argmax(-1)
-    out=[]
-    for i,idx in enumerate(ids):
-        t=i2t.get(int(idx),"<PAD>")
-        if t=="<EOS>": break
-        if i<len(words): out.append(t)
-    return out
+# 3) Discriminator
+def make_discriminator():
+    d = models.Sequential(name="discriminator")
+    d.add(layers.Conv2D(64, 5, strides=2, padding='same', input_shape=(28,28,1)))
+    d.add(layers.LeakyReLU()); d.add(layers.Dropout(0.3))
+    d.add(layers.Conv2D(128, 5, strides=2, padding='same'))
+    d.add(layers.LeakyReLU()); d.add(layers.Dropout(0.3))
+    d.add(layers.Flatten()); d.add(layers.Dense(1))
+    return d
 
-for s in sents:
-    print("Input :", " ".join(s))
-    print("Pred  :", " ".join(predict_tags(s)))
-    print("-"*25)
+generator = make_generator()
+discriminator = make_discriminator()
+
+# 4) Loss & optimizers
+cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+g_opt = optimizers.Adam(1e-4); d_opt = optimizers.Adam(1e-4)
+
+def gen_loss(fake_out):
+    return cross_entropy(tf.ones_like(fake_out), fake_out)
+def disc_loss(real_out, fake_out):
+    r = cross_entropy(tf.ones_like(real_out), real_out)
+    f = cross_entropy(tf.zeros_like(fake_out), fake_out)
+    return r + f
+
+# 5) Training step
+@tf.function
+def train_step(real_images):
+    noise = tf.random.normal([real_images.shape[0], LATENT_DIM])
+    with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
+        fake_images = generator(noise, training=True)
+        real_out = discriminator(real_images, training=True)
+        fake_out = discriminator(fake_images, training=True)
+        g_loss = gen_loss(fake_out)
+        d_loss = disc_loss(real_out, fake_out)
+    grads_g = gen_tape.gradient(g_loss, generator.trainable_variables)
+    grads_d = disc_tape.gradient(d_loss, discriminator.trainable_variables)
+    g_opt.apply_gradients(zip(grads_g, generator.trainable_variables))
+    d_opt.apply_gradients(zip(grads_d, discriminator.trainable_variables))
+    return g_loss, d_loss
+
+# 6) Train loop (short)
+seed = tf.random.normal([16, LATENT_DIM])
+for epoch in range(1, EPOCHS+1):
+    g_meter = tf.keras.metrics.Mean(); d_meter = tf.keras.metrics.Mean()
+    for batch in train_ds:
+        gl, dl = train_step(batch)
+        g_meter.update_state(gl); d_meter.update_state(dl)
+    print(f"Epoch {epoch}/{EPOCHS} — gen_loss: {g_meter.result().numpy():.4f}, disc_loss: {d_meter.result().numpy():.4f}")
+
+# 7) Generate augmented images
+samples = generator(seed, training=False).numpy()
+samples = (samples + 1.0) / 2.0  # to [0,1]
+
+# 8) Display 4x4 grid
+fig, axs = plt.subplots(4,4, figsize=(5,5))
+idx = 0
+for i in range(4):
+    for j in range(4):
+        axs[i,j].axis('off')
+        axs[i,j].imshow(samples[idx,:,:,0], cmap='gray')
+        idx += 1
+plt.suptitle("GAN-created augmentation samples")
+plt.tight_layout()
+plt.show()
+# Optionally save: fig.savefig("gan_augmented_grid.png")
 
 
+
+
+....
+Epoch 1/10 — gen_loss: ...
+...
+Epoch 10/10 — gen_loss: ...
+
+
+....
+Algorithm:
+Start the program
+Load the images from the directory. 
+Split the data into train and test images
+Training the CNN using the two different sized datasets with no augmented data. 
+Train a network based on ResNet-50V2 with data augmentation
+Preprocess the image and submit it to the network for classification.
+Now try it with a walrus image that the network hasn't seen before. Start by loading 
+the image.
+Finally, Preprocess the image and make a prediction. 
+Stop the program.
+
+
+
+....
+colab 
