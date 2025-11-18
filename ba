@@ -5,7 +5,7 @@ Provide examples that: update rows, export/import table, and demonstrate SORT BY
 
 ALGORITHM (one flow — stepwise)
 
-Create a table (transactional ORC + bucketing) so UPDATE works.
+Create a table (transactional ORC + bucketing) so UPDATE works. 
 
 Insert sample rows.
 
@@ -138,3 +138,4 @@ SELECT ... CLUSTER BY dept; (same dept grouped & sorted inside reducer):
 
 
 --------------------------------------------------------------
+
